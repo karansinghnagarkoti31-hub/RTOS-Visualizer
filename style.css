@@ -1,0 +1,76 @@
+body {
+  background: #f5f6f7;
+  font-family: Arial, sans-serif;
+}
+
+.container {
+  width: 80%;
+  margin: 40px auto;
+  text-align: center;
+}
+
+.controls {
+  margin-bottom: 20px;
+}
+
+.controls input, select, button {
+  margin: 5px;
+  padding: 6px 10px;
+  border-radius: 5px;
+}
+
+.simulate-btn {
+  background-color: #007BFF;
+  color: white;
+  border: none;
+  cursor: pointer;
+}
+
+#processTable {
+  margin: 20px auto;
+  border-collapse: collapse;
+  width: 60%;
+}
+
+#processTable th, #processTable td {
+  border: 1px solid #ccc;
+  padding: 8px;
+}
+
+.chart-container {
+  margin-top: 30px;
+  height: 300px;
+}
+
+.simulation-controls {
+  margin-top: 15px;
+  padding: 10px;
+  background-color: #f8f9fa;
+  border-radius: 5px;
+  border: 1px solid #dee2e6;
+}
+
+.control-btn {
+  background-color: #6c757d;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  margin: 0 5px;
+}
+
+.control-btn:disabled {
+  background-color: #adb5bd;
+  cursor: not-allowed;
+}
+
+#speedSlider {
+  margin: 0 10px;
+  width: 100px;
+}
+
+#speedValue {
+  font-weight: bold;
+  color: #007BFF;
+}

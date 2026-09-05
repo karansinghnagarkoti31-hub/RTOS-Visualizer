@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RTOS Visualizer</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="container">
+    <h1>Real-Time Operating System Visualizer</h1>
+
+    <div class="controls">
+      <input id="pid" placeholder="PID" type="text">
+      <input id="burst" placeholder="Burst Time" type="number">
+      <input id="arrival" placeholder="Arrival Time" type="number">
+      <input id="priority" placeholder="Priority" type="number">
+      <button onclick="addProcess()">Add Process</button>
+      <button onclick="clearAll()">Clear All</button>
+
+      <select id="algorithm">
+        <option>FCFS</option>
+        <option>SJF</option>
+        <option>SRTF</option>
+        <option>Priority</option>
+        <option>Round Robin</option>
+      </select>
+      
+      <input id="quantum" placeholder="Quantum (RR)" type="number" value="2">
+
+      <div class="simulation-controls">
+        <button id="startBtn" class="simulate-btn" onclick="startSimulation()">▶️ Start</button>
+        <button id="pauseBtn" class="control-btn" onclick="pauseSimulation()" disabled>⏸️ Pause</button>
+        <button id="stopBtn" class="control-btn" onclick="stopSimulation()" disabled>⏹️ Stop</button>
+        <label for="speedSlider">Speed:</label>
+        <input type="range" id="speedSlider" min="1" max="10" value="5" onchange="updateSpeed()">
+        <span id="speedValue">5x</span>
+      </div>
+    </div>
+
+    <table id="processTable">
+      <thead>
+        <tr><th>PID</th><th>Burst</th><th>Arrival</th><th>Priority</th><th>State</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <div class="chart-container">
+      <canvas id="ganttChart"></canvas>
+    </div>
+    <div class="chart-container">
+      <canvas id="trueGanttChart"></canvas>
+    </div>
+    <h3 id="totalTime"></h3>
+    
+    
+    <div id="performanceMetrics" style="margin-top: 20px; display: none;">
+      <h4>Performance Metrics</h4>
+      <table id="metricsTable" style="width: 100%; border-collapse: collapse; margin: 10px 0;">
+        <thead>
+          <tr style="background-color: #f2f2f2;">
+            <th style="border: 1px solid #ddd; padding: 8px;">PID</th>
+            <th style="border: 1px solid #ddd; padding: 8px;">Arrival</th>
+            <th style="border: 1px solid #ddd; padding: 8px;">Burst</th>
+            <th style="border: 1px solid #ddd; padding: 8px;">Finish</th>
+            <th style="border: 1px solid #ddd; padding: 8px;">Turnaround</th>
+            <th style="border: 1px solid #ddd; padding: 8px;">Waiting</th>
+            <th style="border: 1px solid #ddd; padding: 8px;">Response</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="averageMetrics" style="margin-top: 10px; padding: 10px; background-color: #e8f4fd; border-radius: 5px;"></div>
+    </div>
+
+    
+    <div id="pcbView" style="margin-top: 20px; display: none;">
+      <h4>Process Control Block (PCB)</h4>
+      <div id="pcbContent" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;"></div>
+    </div>
+  </div>
+
+  <script>
+    let processes = [];
+    let chart;
+    let ganttChart;
+    const ctx = document.getElementById('ganttChart').getContext('2d');
+    const ctxTrueGantt = document.getElementById('trueGanttChart').getContext('2d');
+    
+    
+    let simulationData = null;
+    let isSimulationRunning = false;
+    let isPaused = false;
+    let currentSpeed = 5;
+    let animationInterval = null;
+
+    function addProcess() {
+      const pid = document.getElementById('pid').value || `P${processes.length + 1}`;
+      const burst = parseInt(document.getElementById('burst').value);
+      const arrival = parseInt(document.getElementById('arrival').value) || 0;
+      const priority = parseInt(document.getElementById('priority').value) || 0;
+      if (!burst) return alert("Enter burst time!");
+      processes.push({ pid, burst, arrival, priority });
+      updateTable();
+      
+      
+      document.getElementById('pid').value = '';
+      document.getElementById('burst').value = '';
+      document.getElementById('arrival').value = '';
+      document.getElementById('priority').value = '';
+    }
+
+    function clearAll() {
+      processes = [];
+      updateTable();
+      if (chart) chart.destroy();
+      document.getElementById('totalTime').textContent = '';
+    }
+
+    function updateTable() {
+      const tbody = document.querySelector('#processTable tbody');
+      tbody.innerHTML = '';
+      processes.forEach(p => {
+        const row = `<tr><td>${p.pid}</td><td>${p.burst}</td><td>${p.arrival || 0}</td><td>${p.priority || 0}</td><td>WAITING</td></tr>`;
+        tbody.insertAdjacentHTML('beforeend', row);
+      });
+    }
+
+    async function startSimulation() {
+      if (isSimulationRunning && !isPaused) return;
+      
+      if (!isSimulationRunning) {
+        const algo = document.getElementById('algorithm').value;
+        const quantum = document.getElementById('quantum').value;
+        const res = await fetch('/simulate', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ processes: [...processes.map(p => ({...p}))], algorithm: algo, quantum })
+        });
+        simulationData = await res.json();
+      }
+      
+      isSimulationRunning = true;
+      isPaused = false;
+      
+      
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('pauseBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = false;
+      
+      
+      animateSimulationWithControls(simulationData.timeline, simulationData.total, simulationData.performance);
+    }
+    
+    function pauseSimulation() {
+      isPaused = true;
+      if (animationInterval) {
+        clearInterval(animationInterval);
+        animationInterval = null;
+      }
+      
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('pauseBtn').disabled = true;
+    }
+    
+    function stopSimulation() {
+      isSimulationRunning = false;
+      isPaused = false;
+      
+      if (animationInterval) {
+        clearInterval(animationInterval);
+        animationInterval = null;
+      }
+      
+      // Reset button states
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('pauseBtn').disabled = true;
+      document.getElementById('stopBtn').disabled = true;
+      
+      // Clear displays
+      if (chart) chart.destroy();
+      if (ganttChart) ganttChart.destroy();
+      document.getElementById('totalTime').textContent = '';
+      document.getElementById('performanceMetrics').style.display = 'none';
+      document.getElementById('pcbView').style.display = 'none';
+    }
+    
+    function updateSpeed() {
+      currentSpeed = parseInt(document.getElementById('speedSlider').value);
+      document.getElementById('speedValue').textContent = currentSpeed + 'x';
+    }
+
+    async function animateSimulation(timeline, totalTime) {
+      if (chart) chart.destroy();
+
+      const labels = [];
+      const targetPoints = [];
+      const dataPoints = [];
+      const colors = [];
+      const pids = timeline.map(seg => seg.pid);
+
+      timeline.forEach((seg, i) => {
+        labels.push(`${seg.start}-${seg.end}`);
+        targetPoints.push(seg.end - seg.start);
+        dataPoints.push(0);
+        colors.push('#42A5F5');
+      });
+
+      chart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: pids,
+          datasets: [{
+            data: dataPoints,
+            backgroundColor: colors,
+            borderRadius: 6
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          animation: {
+            duration: 0
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  const seg = timeline[context.dataIndex];
+                  return `${seg.pid}: ${seg.start} → ${seg.end}`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: { title: { display: true, text: 'Time Units' } },
+            y: { title: { display: true, text: 'Processes' } }
+          }
+        }
+      });
+
+      
+      const rows = document.querySelectorAll('#processTable tbody tr');
+      
+      
+      const processStatus = {};
+      processes.forEach(p => {
+        processStatus[p.pid] = { totalBurst: p.burst, completedBurst: 0 };
+      });
+
+      
+      function fillBar(index, units, stepMs = 800) {
+        return new Promise(resolve => {
+          let filled = 0;
+          const tick = setInterval(() => {
+            if (filled >= units) {
+              clearInterval(tick);
+              resolve();
+              return;
+            }
+            const currentValue = chart.data.datasets[0].data[index] || 0;
+            chart.data.datasets[0].data[index] = currentValue + 1;
+            chart.update();
+            filled += 1;
+          }, stepMs);
+        });
+      }
+
+      
+      function updateAllProcessStates() {
+        rows.forEach(row => {
+          const pid = row.cells[0].textContent;
+          const status = processStatus[pid];
+          if (status) {
+            if (status.completedBurst >= status.totalBurst) {
+              row.cells[3].textContent = "TERMINATED";
+              row.style.background = "#FFB6C1";
+            } else {
+              row.cells[3].textContent = "WAITING";
+              row.style.background = "#FFF3CD";
+            }
+          }
+        });
+      }
+
+      
+      for (let i = 0; i < timeline.length; i++) {
+        const seg = timeline[i];
+        const row = [...rows].find(r => r.cells[0].textContent === seg.pid);
+        
+        
+        updateAllProcessStates();
+        
+        if (row) {
+          row.cells[3].textContent = "RUNNING";
+          row.style.background = "#90EE90";
+        }
+
+        
+        const units = targetPoints[i];
+        await fillBar(i, units);
+
+        
+        if (processStatus[seg.pid]) {
+          processStatus[seg.pid].completedBurst += units;
+        }
+      }
+      
+      
+      updateAllProcessStates();
+
+      document.getElementById('totalTime').textContent = `Total Execution Time: ${totalTime} units`;
+
+      
+      renderGantt(timeline, totalTime);
+    }
+
+    async function animateSimulationWithControls(timeline, totalTime, performance) {
+      if (chart) chart.destroy();
+
+      const labels = [];
+      const targetPoints = [];
+      const dataPoints = [];
+      const colors = [];
+      const pids = timeline.map(seg => seg.pid);
+
+      timeline.forEach((seg, i) => {
+        labels.push(`${seg.start}-${seg.end}`);
+        targetPoints.push(seg.end - seg.start);
+        dataPoints.push(0); // start empty, we will fill to target
+        colors.push('#42A5F5');
+      });
+
+      chart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: pids,
+          datasets: [{
+            data: dataPoints,
+            backgroundColor: colors,
+            borderRadius: 6
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          animation: {
+            duration: 0
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  const seg = timeline[context.dataIndex];
+                  return `${seg.pid}: ${seg.start} → ${seg.end}`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: { title: { display: true, text: 'Time Units' } },
+            y: { title: { display: true, text: 'Processes' } }
+          }
+        }
+      });
+
+      
+      const rows = document.querySelectorAll('#processTable tbody tr');
+      
+      
+      const processStatus = {};
+      processes.forEach(p => {
+        processStatus[p.pid] = { totalBurst: p.burst, completedBurst: 0, state: 'WAITING' };
+      });
+
+      
+      function fillBar(index, units, stepMs) {
+        return new Promise(resolve => {
+          let filled = 0;
+          const tick = setInterval(() => {
+            if (filled >= units || isPaused) {
+              clearInterval(tick);
+              if (!isPaused) resolve();
+              return;
+            }
+            const currentValue = chart.data.datasets[0].data[index] || 0;
+            chart.data.datasets[0].data[index] = currentValue + 1;
+            chart.update();
+            filled += 1;
+          }, stepMs);
+        });
+      }
+
+      
+      function updateAllProcessStates() {
+        rows.forEach(row => {
+          const pid = row.cells[0].textContent;
+          const status = processStatus[pid];
+          if (status) {
+            if (status.completedBurst >= status.totalBurst) {
+              row.cells[4].textContent = "TERMINATED";
+              row.style.background = "#FFB6C1";
+              status.state = 'TERMINATED';
+            } else if (status.state === 'RUNNING') {
+              // Only change to WAITING if not the current running process
+              const currentRunningPid = getCurrentRunningProcess();
+              if (pid !== currentRunningPid) {
+                row.cells[4].textContent = "WAITING";
+                row.style.background = "#FFF3CD";
+                status.state = 'WAITING';
+              }
+            }
+          }
+        });
+      }
+
+      
+      function getCurrentRunningProcess() {
+        const runningRow = [...rows].find(row => row.cells[4].textContent === "RUNNING");
+        return runningRow ? runningRow.cells[0].textContent : null;
+      }
+
+      
+      for (let i = 0; i < timeline.length; i++) {
+        if (isPaused) {
+          
+          while (isPaused && isSimulationRunning) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          if (!isSimulationRunning) break;
+        }
+        
+        const seg = timeline[i];
+        const row = [...rows].find(r => r.cells[0].textContent === seg.pid);
+        
+        
+        const prevSeg = i > 0 ? timeline[i-1] : null;
+        const isNewProcess = !prevSeg || seg.pid !== prevSeg.pid;
+        
+        if (isNewProcess) {
+          
+          updateAllProcessStates();
+        }
+        
+        if (row) {
+          row.cells[4].textContent = "RUNNING";
+          row.style.background = "#90EE90";
+          processStatus[seg.pid].state = 'RUNNING';
+        }
+
+        
+        const units = targetPoints[i];
+        const stepMs = Math.max(50, 800 / currentSpeed); // Speed control
+        await fillBar(i, units, stepMs);
+
+        
+        if (processStatus[seg.pid]) {
+          processStatus[seg.pid].completedBurst += units;
+        }
+        
+        
+      }
+      
+      
+      updateAllProcessStates();
+
+      document.getElementById('totalTime').textContent = `Total Execution Time: ${totalTime} units`;
+
+      
+      renderGantt(timeline, totalTime);
+      
+      
+      displayPerformanceMetrics(performance);
+      
+      
+      displayPCBView(processStatus);
+      
+      
+      isSimulationRunning = false;
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('pauseBtn').disabled = true;
+      document.getElementById('stopBtn').disabled = true;
+    }
+
+    function displaySchedulabilityAnalysis(sched) {
+      const infoDiv = document.getElementById('schedulabilityInfo');
+      const textP = document.getElementById('schedulabilityText');
+      
+      if (!sched) {
+        infoDiv.style.display = 'none';
+        return;
+      }
+      
+      const status = sched.is_schedulable ? 'SCHEDULABLE' : 'NOT SCHEDULABLE';
+      const statusColor = sched.is_schedulable ? '#d4edda' : '#f8d7da';
+      const borderColor = sched.is_schedulable ? '#c3e6cb' : '#f5c6cb';
+      
+      infoDiv.style.display = 'block';
+      infoDiv.style.backgroundColor = statusColor;
+      infoDiv.style.border = `1px solid ${borderColor}`;
+      
+      let analysisText = `<strong>${status}</strong><br>`;
+      analysisText += `Algorithm: ${sched.algorithm}<br>`;
+      analysisText += `Utilization: ${sched.utilization}<br>`;
+      analysisText += `Bound: ${sched.bound}<br>`;
+      
+      if (sched.algorithm === 'EDF') {
+        analysisText += `EDF Test: ${sched.utilization} ≤ 1.0 ${sched.is_schedulable ? '✓' : '✗'}`;
+      } else if (sched.algorithm === 'RMS') {
+        analysisText += `RMS Test: ${sched.utilization} ≤ ${sched.bound} ${sched.is_schedulable ? '✓' : '✗'}`;
+      } else if (sched.algorithm === 'LLF') {
+        analysisText += `LLF Test: ${sched.utilization} ≤ 1.0 ${sched.is_schedulable ? '✓' : '✗'}`;
+      }
+      
+      if (!sched.is_schedulable) {
+        analysisText += `<br><strong>Warning:</strong> System may not terminate - tasks will miss deadlines!`;
+      }
+      
+      textP.innerHTML = analysisText;
+    }
+
+    function displayPerformanceMetrics(performance) {
+      const metricsDiv = document.getElementById('performanceMetrics');
+      const tbody = document.querySelector('#metricsTable tbody');
+      const averagesDiv = document.getElementById('averageMetrics');
+      
+      
+      tbody.innerHTML = '';
+      
+      
+      performance.process_metrics.forEach(metric => {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td style="border: 1px solid #ddd; padding: 8px;">${metric.pid}</td>
+          <td style="border: 1px solid #ddd; padding: 8px;">${metric.arrival}</td>
+          <td style="border: 1px solid #ddd; padding: 8px;">${metric.burst}</td>
+          <td style="border: 1px solid #ddd; padding: 8px;">${metric.finish}</td>
+          <td style="border: 1px solid #ddd; padding: 8px;">${metric.turnaround}</td>
+          <td style="border: 1px solid #ddd; padding: 8px;">${metric.waiting}</td>
+          <td style="border: 1px solid #ddd; padding: 8px;">${metric.response}</td>
+        `;
+        tbody.appendChild(row);
+      });
+      
+      
+      averagesDiv.innerHTML = `
+        <h5>Average Metrics:</h5>
+        <p><strong>Average Waiting Time:</strong> ${performance.averages.waiting} units</p>
+        <p><strong>Average Turnaround Time:</strong> ${performance.averages.turnaround} units</p>
+        <p><strong>Average Response Time:</strong> ${performance.averages.response} units</p>
+        <h5>System Metrics:</h5>
+        <p><strong>CPU Utilization:</strong> ${performance.system_metrics.cpu_utilization}%</p>
+        <p><strong>Throughput:</strong> ${performance.system_metrics.throughput} processes/unit time</p>
+      `;
+      
+      metricsDiv.style.display = 'block';
+    }
+
+    function displayPCBView(processStatus) {
+      const pcbDiv = document.getElementById('pcbView');
+      const pcbContent = document.getElementById('pcbContent');
+      
+      
+      pcbContent.innerHTML = '';
+      
+      
+      Object.entries(processStatus).forEach(([pid, status]) => {
+        const pcbCard = document.createElement('div');
+        pcbCard.style.cssText = `
+          border: 2px solid #ddd;
+          border-radius: 8px;
+          padding: 15px;
+          background-color: #f9f9f9;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        `;
+        
+        const stateColor = {
+          'WAITING': '#FFF3CD',
+          'RUNNING': '#90EE90',
+          'TERMINATED': '#FFB6C1'
+        }[status.state] || '#f0f0f0';
+        
+        pcbCard.innerHTML = `
+          <h4 style="margin: 0 0 10px 0; color: #333;">Process ${pid}</h4>
+          <div style="background-color: ${stateColor}; padding: 8px; border-radius: 4px; margin-bottom: 10px;">
+            <strong>State:</strong> ${status.state}
+          </div>
+          <div style="margin: 5px 0;"><strong>Total Burst:</strong> ${status.totalBurst}</div>
+          <div style="margin: 5px 0;"><strong>Completed:</strong> ${status.completedBurst}</div>
+          <div style="margin: 5px 0;"><strong>Remaining:</strong> ${status.totalBurst - status.completedBurst}</div>
+          <div style="margin: 5px 0;"><strong>Progress:</strong> ${Math.round((status.completedBurst / status.totalBurst) * 100)}%</div>
+        `;
+        
+        pcbContent.appendChild(pcbCard);
+      });
+      
+      pcbDiv.style.display = 'block';
+    }
+
+    
+    const pidColorMap = {};
+    const palette = ['#42A5F5', '#66BB6A', '#FFA726', '#AB47BC', '#EF5350', '#26C6DA', '#8D6E63', '#EC407A', '#7E57C2', '#9CCC65'];
+    function colorForPid(pid) {
+      if (!pidColorMap[pid]) {
+        const index = Object.keys(pidColorMap).length % palette.length;
+        pidColorMap[pid] = palette[index];
+      }
+      return pidColorMap[pid];
+    }
+
+    function renderGantt(timeline, totalTime) {
+      if (ganttChart) ganttChart.destroy();
+
+      const yLabels = [...new Set(timeline.map(seg => seg.pid))];
+      const data = timeline.map(seg => ({
+        x: [seg.start, seg.end],
+        y: seg.pid,
+        backgroundColor: colorForPid(seg.pid)
+      }));
+
+      ganttChart = new Chart(ctxTrueGantt, {
+        type: 'bar',
+        data: { datasets: [{ data }] },
+        options: {
+          indexAxis: 'y',
+          parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  const seg = context.raw;
+                  return `${seg.y}: ${seg.x[0]} → ${seg.x[1]}`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: { beginAtZero: true, min: 0, max: totalTime, title: { display: true, text: 'Time Units' } },
+            y: { type: 'category', labels: yLabels, title: { display: true, text: 'Processes' } }
+          }
+        }
+      });
+    }
+  </script>
+</body>
+</html>
